@@ -4,7 +4,6 @@ from diffusers import DiffusionPipeline, QwenImageTransformer2DModel
 from diffusers.utils import load_image
 from PIL import Image
 import torch
-import gc
 import base64
 from transformers.modeling_utils import no_init_weights
 from dfloat11 import DFloat11Model
@@ -15,6 +14,69 @@ MODEL_EDIT_NAME = "Qwen/Qwen-Image-Edit"
 CPU_OFFLOAD = True
 CPU_OFFLOAD_BLOCKS = 16
 PIN_MEMORY = False
+
+# Loaded once per worker process and reused across every task of that type,
+# instead of rebuilding + deleting the full pipeline (transformer + DFloat11
+# weights) on every single request. Kept as two separate slots since
+# text-to-image and image-edit use different checkpoints — a worker only
+# pays to load whichever one(s) it actually gets asked to run.
+_PIPES: dict[str, DiffusionPipeline] = {}
+
+
+def _get_text_to_image_pipe() -> DiffusionPipeline:
+    if "text_to_image" not in _PIPES:
+        with no_init_weights():
+            transformer = QwenImageTransformer2DModel.from_config(
+                QwenImageTransformer2DModel.load_config(
+                    MODEL_NAME, subfolder="transformer",
+                ),
+            ).to(torch.bfloat16)
+
+        DFloat11Model.from_pretrained(
+            "DFloat11/Qwen-Image-DF11",
+            device="cpu",
+            cpu_offload=CPU_OFFLOAD,
+            cpu_offload_blocks=CPU_OFFLOAD_BLOCKS,
+            pin_memory=PIN_MEMORY,
+            bfloat16_model=transformer,
+        )
+
+        pipe = DiffusionPipeline.from_pretrained(
+            MODEL_NAME,
+            transformer=transformer,
+            torch_dtype=torch.bfloat16,
+        )
+        pipe.enable_model_cpu_offload()
+        _PIPES["text_to_image"] = pipe
+    return _PIPES["text_to_image"]
+
+
+def _get_image_edit_pipe() -> DiffusionPipeline:
+    if "image_to_image_edit" not in _PIPES:
+        with no_init_weights():
+            transformer = QwenImageTransformer2DModel.from_config(
+                QwenImageTransformer2DModel.load_config(
+                    MODEL_EDIT_NAME, subfolder="transformer",
+                ),
+            ).to(torch.bfloat16)
+
+        DFloat11Model.from_pretrained(
+            "DFloat11/Qwen-Image-Edit-DF11",
+            device="cpu",
+            cpu_offload=CPU_OFFLOAD,
+            cpu_offload_blocks=CPU_OFFLOAD_BLOCKS,
+            pin_memory=PIN_MEMORY,
+            bfloat16_model=transformer,
+        )
+
+        pipe = DiffusionPipeline.from_pretrained(
+            MODEL_EDIT_NAME,
+            transformer=transformer,
+            torch_dtype=torch.bfloat16,
+        )
+        pipe.enable_model_cpu_offload()
+        _PIPES["image_to_image_edit"] = pipe
+    return _PIPES["image_to_image_edit"]
 
 IMAGE_QUALITY_TO_STEPS = {
     "low": 20,
@@ -43,28 +105,7 @@ def run_text_to_image(positive_prompt: str, negative_prompt: str, image_ratio: s
     Returns:
         str: a base64-encoded string.
     """
-    with no_init_weights():
-        transformer = QwenImageTransformer2DModel.from_config(
-            QwenImageTransformer2DModel.load_config(
-                MODEL_NAME, subfolder="transformer",
-            ),
-        ).to(torch.bfloat16)
-
-    DFloat11Model.from_pretrained(
-        "DFloat11/Qwen-Image-DF11",
-        device="cpu",
-        cpu_offload=CPU_OFFLOAD,
-        cpu_offload_blocks=CPU_OFFLOAD_BLOCKS,
-        pin_memory=PIN_MEMORY,
-        bfloat16_model=transformer,
-    )
-
-    pipe = DiffusionPipeline.from_pretrained(
-        MODEL_NAME,
-        transformer=transformer,
-        torch_dtype=torch.bfloat16,
-    )
-    pipe.enable_model_cpu_offload()
+    pipe = _get_text_to_image_pipe()
 
     positive_magic = {
         "en": ", Ultra HD, 4K, cinematic composition.", # for english prompt
@@ -83,10 +124,6 @@ def run_text_to_image(positive_prompt: str, negative_prompt: str, image_ratio: s
             true_cfg_scale=4.0,
             generator=torch.Generator(device="cuda").manual_seed(random_seed)
         ).images[0]
-        del pipe
-        del transformer
-        torch.cuda.empty_cache()
-        gc.collect()
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     image_data = buffer.getvalue()
@@ -108,29 +145,7 @@ def run_image_to_image_edit(image_bytes: str, positive_prompt: str, negative_pro
     Returns:
         str: a base64-encoded string.
     """
-    with no_init_weights():
-        transformer = QwenImageTransformer2DModel.from_config(
-            QwenImageTransformer2DModel.load_config(
-                MODEL_EDIT_NAME, subfolder="transformer",
-            ),
-        ).to(torch.bfloat16)
-
-    DFloat11Model.from_pretrained(
-        "DFloat11/Qwen-Image-Edit-DF11",
-        device="cpu",
-        cpu_offload=CPU_OFFLOAD,
-        cpu_offload_blocks=CPU_OFFLOAD_BLOCKS,
-        pin_memory=PIN_MEMORY,
-        bfloat16_model=transformer,
-    )
-
-    pipe = DiffusionPipeline.from_pretrained(
-        MODEL_EDIT_NAME,
-        transformer=transformer,
-        torch_dtype=torch.bfloat16,
-    )
-    pipe.enable_model_cpu_offload()
-
+    pipe = _get_image_edit_pipe()
 
     random_seed = random.randint(0, 999999)
     decoded_image_bytes = base64.b64decode(image_bytes)
@@ -147,11 +162,7 @@ def run_image_to_image_edit(image_bytes: str, positive_prompt: str, negative_pro
     with torch.inference_mode():
         output = pipe(**inputs)
         image = output.images[0]
-        del pipe
-        del transformer
-        torch.cuda.empty_cache()
-        gc.collect()
-    
+
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     image_data = buffer.getvalue()

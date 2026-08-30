@@ -15,4 +15,5 @@ dependencies = [
     "cupy-cuda12x",
     "dfloat11",
     "torchvision>=0.23.0",
+    "runpod>=1.7.0",
 ]
