@@ -47,7 +47,15 @@ def _get_text_to_image_pipe() -> DiffusionPipeline:
             torch_dtype=torch.bfloat16,
         )
         pipe.enable_model_cpu_offload()
-        pipe.load_lora_weights('starsfriday/Qwen-Image-NSFW', weight_name='qwen_image_nsfw.safetensors', adapter_name="lora")
+        # NOT calling pipe.load_lora_weights() here: PEFT's LoRA injection
+        # needs a real `.weight` tensor per Linear layer to build the
+        # adapter, but DFloat11's CPU-offloaded layers don't expose one
+        # (weights are decompressed on-the-fly during forward instead) —
+        # this raises AttributeError: 'Linear' object has no attribute
+        # 'weight'. Fix is to fuse the LoRA into the base weights *before*
+        # DFloat11 compression instead — see scripts/compress_lora_df11.py.
+        # Once that's run, point the DFloat11Model.from_pretrained() call
+        # above at the resulting compressed repo and this comment goes away.
 
         _PIPES["text_to_image"] = pipe
     return _PIPES["text_to_image"]
