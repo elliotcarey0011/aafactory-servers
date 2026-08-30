@@ -1,14 +1,31 @@
 import io
-import torch
 import torchaudio
 from zonos.model import Zonos
 from zonos.conditioning import make_cond_dict
 from zonos.utils import DEFAULT_DEVICE as device
 import base64
 from pathlib import Path
-import gc
 
 MODULE_PATH = Path(__file__).parent
+
+_MODEL: Zonos | None = None
+
+
+def get_model() -> Zonos:
+    """Load the model once per worker process and reuse it across every
+    task. Zonos.from_pretrained() downloads/loads the full model onto the
+    GPU, so rebuilding it per request (the previous behavior here) meant
+    every single generation paid that cost, even on an already-running
+    worker. Weight download itself is cached under HF_HOME — point that at
+    a persistent volume in production so a fresh worker process doesn't
+    re-download from HuggingFace either.
+    """
+    global _MODEL
+    if _MODEL is None:
+        # model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-hybrid", device=device)
+        _MODEL = Zonos.from_pretrained("Zyphra/Zonos-v0.1-transformer", device=device)
+    return _MODEL
+
 
 def run_text_to_speech(prompt: str, voice_bytes: str,  language: str) -> bytes:
     """
@@ -22,9 +39,7 @@ def run_text_to_speech(prompt: str, voice_bytes: str,  language: str) -> bytes:
     Returns:
         str: a base64-encoded string.
     """
-    # Simulate processing time
-    # model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-hybrid", device=device)
-    model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-transformer", device=device)
+    model = get_model()
 
     voice_sample_bytes = base64.b64decode(voice_bytes)
     voice_sample_buffer = io.BytesIO(voice_sample_bytes)
@@ -45,8 +60,4 @@ def run_text_to_speech(prompt: str, voice_bytes: str,  language: str) -> bytes:
     torchaudio.save(buffer, output, model.autoencoder.sampling_rate, format="wav")
     buffer.seek(0)
     audio_data = buffer.read()
-    # Clean up model and free GPU memory
-    del model
-    torch.cuda.empty_cache()
-    gc.collect()
     return base64.b64encode(audio_data)
