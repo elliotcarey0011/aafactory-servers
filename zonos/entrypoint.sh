@@ -8,6 +8,9 @@ set -e
 # `docker run`, or a Pod without a volume configured).
 if [ -d "/runpod-volume" ]; then
   export HF_HOME="/runpod-volume/hf-cache"
+  echo "[entrypoint] Network volume detected — HF_HOME=$HF_HOME (cache size: $(du -sh "$HF_HOME" 2>/dev/null | cut -f1 || echo 'empty'))"
+else
+  echo "[entrypoint] No network volume mounted — using default HF cache (will re-download on every restart)"
 fi
 
 if [ "$WORKER_MODE" = "serverless" ]; then
