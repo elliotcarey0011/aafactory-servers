@@ -16,4 +16,5 @@ dependencies = [
     "dfloat11",
     "torchvision>=0.23.0",
     "runpod>=1.7.0",
+    "peft>=0.13.0",
 ]
