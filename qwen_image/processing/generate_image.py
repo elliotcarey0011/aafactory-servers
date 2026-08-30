@@ -47,6 +47,8 @@ def _get_text_to_image_pipe() -> DiffusionPipeline:
             torch_dtype=torch.bfloat16,
         )
         pipe.enable_model_cpu_offload()
+        pipe.load_lora_weights('starsfriday/Qwen-Image-NSFW', weight_name='qwen_image_nsfw.safetensors', adapter_name="lora")
+
         _PIPES["text_to_image"] = pipe
     return _PIPES["text_to_image"]
 
