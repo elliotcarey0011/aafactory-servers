@@ -20,7 +20,7 @@ steps:
         TAG="${TAG_NAME#kandinsky-}"
         docker buildx build \
           --platform=linux/amd64 \
-          --tag=aafactory/kandinsky-server:$$TAG \
+          --tag=elliotcarery/kandinsky-server:$$TAG \
           --push \
           -f dockerfile \
           .
