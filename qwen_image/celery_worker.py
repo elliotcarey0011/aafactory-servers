@@ -14,13 +14,31 @@ app = Celery(
 )
 
 
-@app.task(name="text_to_image", queue="qwen_image")
-def text_to_image(positive_prompt: str, negative_prompt: str, image_ratio: str, image_quality: str) -> str:
-    result = run_text_to_image(positive_prompt=positive_prompt, negative_prompt=negative_prompt, image_ratio=image_ratio, image_quality=image_quality)
+@app.task(name="text_to_image", queue="qwen_image", bind=True)
+def text_to_image(self, positive_prompt: str, negative_prompt: str, image_ratio: str, image_quality: str) -> str:
+    def _report_progress(step, total_steps):
+        self.update_state(state="PROGRESS", meta={"step": step, "total_steps": total_steps})
+
+    result = run_text_to_image(
+        positive_prompt=positive_prompt,
+        negative_prompt=negative_prompt,
+        image_ratio=image_ratio,
+        image_quality=image_quality,
+        progress_callback=_report_progress,
+    )
     return result.decode('utf-8')
 
 
-@app.task(name="image_to_image_edit", queue="qwen_image")
-def image_to_image_edit(image_bytes: str, positive_prompt: str, negative_prompt: str, image_quality: str) -> str:
-    result = run_image_to_image_edit(image_bytes=image_bytes, positive_prompt=positive_prompt, negative_prompt=negative_prompt, image_quality=image_quality)
+@app.task(name="image_to_image_edit", queue="qwen_image", bind=True)
+def image_to_image_edit(self, image_bytes: str, positive_prompt: str, negative_prompt: str, image_quality: str) -> str:
+    def _report_progress(step, total_steps):
+        self.update_state(state="PROGRESS", meta={"step": step, "total_steps": total_steps})
+
+    result = run_image_to_image_edit(
+        image_bytes=image_bytes,
+        positive_prompt=positive_prompt,
+        negative_prompt=negative_prompt,
+        image_quality=image_quality,
+        progress_callback=_report_progress,
+    )
     return result.decode('utf-8')

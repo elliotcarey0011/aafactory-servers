@@ -19,7 +19,16 @@ def handler(job):
     task_name = job_input.pop("task_name")
     run_task = _TASKS[task_name]
 
-    result = run_task(**job_input)
+    # Surfaced back through RunPod's own /status polling — see
+    # aafactory_nsfw's backend/runpod_serverless.py for the reader side.
+    # Exact field name RunPod exposes this under in the status response is
+    # unverified against public docs; that side is written defensively.
+    def _report_progress(step, total_steps):
+        runpod.serverless.progress_update(
+            job, {"step": step, "total_steps": total_steps}
+        )
+
+    result = run_task(**job_input, progress_callback=_report_progress)
     return {"image_base64": result.decode("utf-8")}
 
 

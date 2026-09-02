@@ -1,5 +1,6 @@
 import random
 from io import BytesIO
+from typing import Callable, Optional
 from diffusers import DiffusionPipeline, QwenImageTransformer2DModel
 from diffusers.utils import load_image
 from PIL import Image
@@ -103,12 +104,23 @@ ASPECT_RATIOS = {
     "2:3": (1056, 1584),
 }
 
-def run_text_to_image(positive_prompt: str, negative_prompt: str, image_ratio: str, image_quality: str) -> bytes:
+def run_text_to_image(
+    positive_prompt: str,
+    negative_prompt: str,
+    image_ratio: str,
+    image_quality: str,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> bytes:
     """
     Run text-to-image processing.
 
     Args:
         text (str): The text prompt describing the desired image.
+        progress_callback: optional, called as (step, total_steps) after each
+            denoising step — step is 1-indexed, reaching total_steps on the
+            final call. Left as a plain callback (not a RunPod/Celery import)
+            so this module stays transport-agnostic; handler.py and
+            celery_worker.py each pass in their own reporting mechanism.
 
     Returns:
         str: a base64-encoded string.
@@ -122,15 +134,23 @@ def run_text_to_image(positive_prompt: str, negative_prompt: str, image_ratio: s
 
     width, height = ASPECT_RATIOS[image_ratio]
     random_seed = random.randint(0, 999999)
+    total_steps = IMAGE_QUALITY_TO_STEPS[image_quality]
+
+    def _on_step_end(pipe, step, timestep, callback_kwargs):
+        if progress_callback:
+            progress_callback(step + 1, total_steps)  # diffusers' step is 0-indexed
+        return callback_kwargs
+
     with torch.inference_mode():
         image = pipe(
             prompt=positive_prompt + positive_magic["en"],
             negative_prompt=negative_prompt,
             width=width,
             height=height,
-            num_inference_steps=IMAGE_QUALITY_TO_STEPS[image_quality],
+            num_inference_steps=total_steps,
             true_cfg_scale=4.0,
-            generator=torch.Generator(device="cuda").manual_seed(random_seed)
+            generator=torch.Generator(device="cuda").manual_seed(random_seed),
+            callback_on_step_end=_on_step_end,
         ).images[0]
     buffer = BytesIO()
     image.save(buffer, format="PNG")
@@ -139,7 +159,13 @@ def run_text_to_image(positive_prompt: str, negative_prompt: str, image_ratio: s
     return base64.b64encode(image_data)
 
 
-def run_image_to_image_edit(image_bytes: str, positive_prompt: str, negative_prompt: str, image_quality: str) -> bytes:
+def run_image_to_image_edit(
+    image_bytes: str,
+    positive_prompt: str,
+    negative_prompt: str,
+    image_quality: str,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> bytes:
     """
     Run image-to-image processing.
 
@@ -149,6 +175,8 @@ def run_image_to_image_edit(image_bytes: str, positive_prompt: str, negative_pro
         negative_prompt (str): The negative text prompt.
         image_ratio (str): The desired image aspect ratio.
         image_quality (str): The desired image quality.
+        progress_callback: optional, called as (step, total_steps) after each
+            denoising step — see run_text_to_image for details.
 
     Returns:
         str: a base64-encoded string.
@@ -158,15 +186,23 @@ def run_image_to_image_edit(image_bytes: str, positive_prompt: str, negative_pro
     random_seed = random.randint(0, 999999)
     decoded_image_bytes = base64.b64decode(image_bytes)
     input_image = Image.open(BytesIO(decoded_image_bytes)).convert("RGB")
+    total_steps = IMAGE_QUALITY_TO_STEPS[image_quality]
+
+    def _on_step_end(pipe, step, timestep, callback_kwargs):
+        if progress_callback:
+            progress_callback(step + 1, total_steps)  # diffusers' step is 0-indexed
+        return callback_kwargs
+
     inputs = {
         "image": input_image,
         "prompt": positive_prompt,
         "generator": torch.manual_seed(random_seed),
         "true_cfg_scale": 4.0,
         "negative_prompt": negative_prompt,
-        "num_inference_steps": IMAGE_QUALITY_TO_STEPS[image_quality],
+        "num_inference_steps": total_steps,
+        "callback_on_step_end": _on_step_end,
     }
-    
+
     with torch.inference_mode():
         output = pipe(**inputs)
         image = output.images[0]
