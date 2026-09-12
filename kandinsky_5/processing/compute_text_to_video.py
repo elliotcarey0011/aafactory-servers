@@ -6,6 +6,7 @@ import logging
 import torch
 
 from kandinsky.kandinsky import get_T2V_pipeline
+from kandinsky.kandinsky.t2v_pipeline import Kandinsky5T2VPipeline
 from pathlib import Path
 
 
@@ -19,26 +20,37 @@ ASPECT_RATIOS = {
     "3:2": (768, 512),
 }
 
+# Loaded once per worker process and reused across every request, instead of
+# rebuilding the pipeline (DiT + VAE + text encoders) on every single task.
+_PIPES: dict[str, Kandinsky5T2VPipeline] = {}
+
+
+def _get_text_to_video_pipe() -> Kandinsky5T2VPipeline:
+    if "text_to_video" not in _PIPES:
+        _PIPES["text_to_video"] = get_T2V_pipeline(
+            device_map={"dit": "cuda:0", "vae": "cuda:0",
+                        "text_embedder": "cuda:0"},
+            conf_path=CONFIGS_PATH,
+            offload=True,
+            magcache=True,
+            quantized_qwen=False,
+            attention_engine="auto",
+        )
+    return _PIPES["text_to_video"]
+
+
 def run_text_to_video(prompt: str, video_aspect_ratio: str) -> bytes:
     """
     Generate a video from a text prompt using the configured text-to-video pipeline.
 
-    This function prepares and runs a text-to-video (T2V) pipeline with preset
-    configuration options (GPU device mapping, offload/magcache/quantization flags,
-    and attention engine). It measures and logs the generation time and saves the
+    This function runs a text-to-video (T2V) pipeline with preset configuration
+    options (GPU device mapping, offload/magcache/quantization flags, and
+    attention engine). It measures and logs the generation time and saves the
     resulting video to the module-level SAVE_FILE_PATH temporarily.
     """
     _disable_warnings()
 
-    pipe = get_T2V_pipeline(
-        device_map={"dit": "cuda:0", "vae": "cuda:0",
-                    "text_embedder": "cuda:0"},
-        conf_path=CONFIGS_PATH,
-        offload=True,
-        magcache=True,
-        quantized_qwen=False,
-        attention_engine="auto",
-    )
+    pipe = _get_text_to_video_pipe()
     _ = pipe(prompt,
              time_length=VIDEO_DURATION,
              width=ASPECT_RATIOS[video_aspect_ratio][0],
