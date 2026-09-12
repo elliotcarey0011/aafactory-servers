@@ -12,9 +12,20 @@ RUN apt-get update && \
     git && rm -rf /var/lib/apt/lists/*
 
 RUN pip install uv
-RUN git clone https://github.com/ai-forever/Kandinsky-5.git /tmp/kandinsky && \
-    mv /tmp/kandinsky/kandinsky /app/kandinsky && \
-    rm -rf /tmp/kandinsky
+
+# No `git clone` of ai-forever/Kandinsky-5 here on purpose: the package this
+# server actually imports (kandinsky.kandinsky.*, per
+# processing/compute_text_to_video.py) is already vendored in this repo at
+# kandinsky_5/kandinsky/kandinsky/ and lands in the image via the COPY below.
+# A `git clone` step used to sit here, populating a second, outer-level
+# `kandinsky` package straight from upstream's moving HEAD. Since
+# `from kandinsky.kandinsky import get_T2V_pipeline` has to fully import that
+# outer `kandinsky/__init__.py` before it can even reach the vendored inner
+# package, every serverless job broke the moment upstream's HEAD renamed
+# get_T2V_pipeline and made __init__.py unconditionally import a peft-only
+# i2v_pipeline.py: ModuleNotFoundError: No module named 'peft'. Re-add a
+# clone only pinned to a specific commit, and only if the vendored copy
+# needs to be refreshed deliberately (updating it to match).
 
 COPY . /app/
 
