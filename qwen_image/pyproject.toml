@@ -7,12 +7,14 @@ requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.10.1",
     "celery>=5.5.3",
-    "diffusers>=0.35.1",
+    "diffusers==0.35.1",
     "pip>=25.2",
     "redis>=6.4.0",
     "torch>=2.8.0",
     "transformers>=4.56.2",
     "cupy-cuda12x",
-    "dfloat11",
+    "dfloat11==0.5.0",
     "torchvision>=0.23.0",
+    "runpod>=1.7.0",
+    "peft==0.17.1",
 ]

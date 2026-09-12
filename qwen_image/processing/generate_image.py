@@ -1,10 +1,10 @@
 import random
 from io import BytesIO
+from typing import Callable, Optional
 from diffusers import DiffusionPipeline, QwenImageTransformer2DModel
 from diffusers.utils import load_image
 from PIL import Image
 import torch
-import gc
 import base64
 from transformers.modeling_utils import no_init_weights
 from dfloat11 import DFloat11Model
@@ -15,6 +15,77 @@ MODEL_EDIT_NAME = "Qwen/Qwen-Image-Edit"
 CPU_OFFLOAD = True
 CPU_OFFLOAD_BLOCKS = 16
 PIN_MEMORY = False
+
+# Loaded once per worker process and reused across every task of that type,
+# instead of rebuilding + deleting the full pipeline (transformer + DFloat11
+# weights) on every single request. Kept as two separate slots since
+# text-to-image and image-edit use different checkpoints — a worker only
+# pays to load whichever one(s) it actually gets asked to run.
+_PIPES: dict[str, DiffusionPipeline] = {}
+
+
+def _get_text_to_image_pipe() -> DiffusionPipeline:
+    if "text_to_image" not in _PIPES:
+        with no_init_weights():
+            transformer = QwenImageTransformer2DModel.from_config(
+                QwenImageTransformer2DModel.load_config(
+                    MODEL_NAME, subfolder="transformer",
+                ),
+            ).to(torch.bfloat16)
+
+        DFloat11Model.from_pretrained(
+            "DFloat11/Qwen-Image-DF11",
+            device="cpu",
+            cpu_offload=CPU_OFFLOAD,
+            cpu_offload_blocks=CPU_OFFLOAD_BLOCKS,
+            pin_memory=PIN_MEMORY,
+            bfloat16_model=transformer,
+        )
+
+        pipe = DiffusionPipeline.from_pretrained(
+            MODEL_NAME,
+            transformer=transformer,
+            torch_dtype=torch.bfloat16,
+        )
+        pipe.enable_model_cpu_offload()
+        # peft/diffusers are pinned (see pyproject.toml) to the exact
+        # versions confirmed working with DFloat11's CPU-offloaded layers —
+        # newer peft releases added a DTensor check in _get_in_out_features
+        # that assumes every Linear has a plain `.weight` tensor, which
+        # DFloat11's compressed layers don't expose, breaking LoRA loading.
+        pipe.load_lora_weights('starsfriday/Qwen-Image-NSFW', weight_name='qwen_image_nsfw.safetensors', adapter_name="lora")
+
+        _PIPES["text_to_image"] = pipe
+    return _PIPES["text_to_image"]
+
+
+def _get_image_edit_pipe() -> DiffusionPipeline:
+    if "image_to_image_edit" not in _PIPES:
+        with no_init_weights():
+            transformer = QwenImageTransformer2DModel.from_config(
+                QwenImageTransformer2DModel.load_config(
+                    MODEL_EDIT_NAME, subfolder="transformer",
+                ),
+            ).to(torch.bfloat16)
+
+        DFloat11Model.from_pretrained(
+            "DFloat11/Qwen-Image-Edit-DF11",
+            device="cpu",
+            cpu_offload=CPU_OFFLOAD,
+            cpu_offload_blocks=CPU_OFFLOAD_BLOCKS,
+            pin_memory=PIN_MEMORY,
+            bfloat16_model=transformer,
+        )
+
+        pipe = DiffusionPipeline.from_pretrained(
+            MODEL_EDIT_NAME,
+            transformer=transformer,
+            torch_dtype=torch.bfloat16,
+        )
+        pipe.enable_model_cpu_offload()
+        pipe.load_lora_weights('starsfriday/Qwen-Image-NSFW', weight_name='qwen_image_nsfw.safetensors', adapter_name="lora")
+        _PIPES["image_to_image_edit"] = pipe
+    return _PIPES["image_to_image_edit"]
 
 IMAGE_QUALITY_TO_STEPS = {
     "low": 20,
@@ -33,38 +104,28 @@ ASPECT_RATIOS = {
     "2:3": (1056, 1584),
 }
 
-def run_text_to_image(positive_prompt: str, negative_prompt: str, image_ratio: str, image_quality: str) -> bytes:
+def run_text_to_image(
+    positive_prompt: str,
+    negative_prompt: str,
+    image_ratio: str,
+    image_quality: str,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> bytes:
     """
     Run text-to-image processing.
 
     Args:
         text (str): The text prompt describing the desired image.
+        progress_callback: optional, called as (step, total_steps) after each
+            denoising step — step is 1-indexed, reaching total_steps on the
+            final call. Left as a plain callback (not a RunPod/Celery import)
+            so this module stays transport-agnostic; handler.py and
+            celery_worker.py each pass in their own reporting mechanism.
 
     Returns:
         str: a base64-encoded string.
     """
-    with no_init_weights():
-        transformer = QwenImageTransformer2DModel.from_config(
-            QwenImageTransformer2DModel.load_config(
-                MODEL_NAME, subfolder="transformer",
-            ),
-        ).to(torch.bfloat16)
-
-    DFloat11Model.from_pretrained(
-        "DFloat11/Qwen-Image-DF11",
-        device="cpu",
-        cpu_offload=CPU_OFFLOAD,
-        cpu_offload_blocks=CPU_OFFLOAD_BLOCKS,
-        pin_memory=PIN_MEMORY,
-        bfloat16_model=transformer,
-    )
-
-    pipe = DiffusionPipeline.from_pretrained(
-        MODEL_NAME,
-        transformer=transformer,
-        torch_dtype=torch.bfloat16,
-    )
-    pipe.enable_model_cpu_offload()
+    pipe = _get_text_to_image_pipe()
 
     positive_magic = {
         "en": ", Ultra HD, 4K, cinematic composition.", # for english prompt
@@ -73,20 +134,24 @@ def run_text_to_image(positive_prompt: str, negative_prompt: str, image_ratio: s
 
     width, height = ASPECT_RATIOS[image_ratio]
     random_seed = random.randint(0, 999999)
+    total_steps = IMAGE_QUALITY_TO_STEPS[image_quality]
+
+    def _on_step_end(pipe, step, timestep, callback_kwargs):
+        if progress_callback:
+            progress_callback(step + 1, total_steps)  # diffusers' step is 0-indexed
+        return callback_kwargs
+
     with torch.inference_mode():
         image = pipe(
             prompt=positive_prompt + positive_magic["en"],
             negative_prompt=negative_prompt,
             width=width,
             height=height,
-            num_inference_steps=IMAGE_QUALITY_TO_STEPS[image_quality],
+            num_inference_steps=total_steps,
             true_cfg_scale=4.0,
-            generator=torch.Generator(device="cuda").manual_seed(random_seed)
+            generator=torch.Generator(device="cuda").manual_seed(random_seed),
+            callback_on_step_end=_on_step_end,
         ).images[0]
-        del pipe
-        del transformer
-        torch.cuda.empty_cache()
-        gc.collect()
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     image_data = buffer.getvalue()
@@ -94,7 +159,13 @@ def run_text_to_image(positive_prompt: str, negative_prompt: str, image_ratio: s
     return base64.b64encode(image_data)
 
 
-def run_image_to_image_edit(image_bytes: str, positive_prompt: str, negative_prompt: str, image_quality: str) -> bytes:
+def run_image_to_image_edit(
+    image_bytes: str,
+    positive_prompt: str,
+    negative_prompt: str,
+    image_quality: str,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> bytes:
     """
     Run image-to-image processing.
 
@@ -104,54 +175,38 @@ def run_image_to_image_edit(image_bytes: str, positive_prompt: str, negative_pro
         negative_prompt (str): The negative text prompt.
         image_ratio (str): The desired image aspect ratio.
         image_quality (str): The desired image quality.
+        progress_callback: optional, called as (step, total_steps) after each
+            denoising step — see run_text_to_image for details.
 
     Returns:
         str: a base64-encoded string.
     """
-    with no_init_weights():
-        transformer = QwenImageTransformer2DModel.from_config(
-            QwenImageTransformer2DModel.load_config(
-                MODEL_EDIT_NAME, subfolder="transformer",
-            ),
-        ).to(torch.bfloat16)
-
-    DFloat11Model.from_pretrained(
-        "DFloat11/Qwen-Image-Edit-DF11",
-        device="cpu",
-        cpu_offload=CPU_OFFLOAD,
-        cpu_offload_blocks=CPU_OFFLOAD_BLOCKS,
-        pin_memory=PIN_MEMORY,
-        bfloat16_model=transformer,
-    )
-
-    pipe = DiffusionPipeline.from_pretrained(
-        MODEL_EDIT_NAME,
-        transformer=transformer,
-        torch_dtype=torch.bfloat16,
-    )
-    pipe.enable_model_cpu_offload()
-
+    pipe = _get_image_edit_pipe()
 
     random_seed = random.randint(0, 999999)
     decoded_image_bytes = base64.b64decode(image_bytes)
     input_image = Image.open(BytesIO(decoded_image_bytes)).convert("RGB")
+    total_steps = IMAGE_QUALITY_TO_STEPS[image_quality]
+
+    def _on_step_end(pipe, step, timestep, callback_kwargs):
+        if progress_callback:
+            progress_callback(step + 1, total_steps)  # diffusers' step is 0-indexed
+        return callback_kwargs
+
     inputs = {
         "image": input_image,
         "prompt": positive_prompt,
         "generator": torch.manual_seed(random_seed),
         "true_cfg_scale": 4.0,
         "negative_prompt": negative_prompt,
-        "num_inference_steps": IMAGE_QUALITY_TO_STEPS[image_quality],
+        "num_inference_steps": total_steps,
+        "callback_on_step_end": _on_step_end,
     }
-    
+
     with torch.inference_mode():
         output = pipe(**inputs)
         image = output.images[0]
-        del pipe
-        del transformer
-        torch.cuda.empty_cache()
-        gc.collect()
-    
+
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     image_data = buffer.getvalue()

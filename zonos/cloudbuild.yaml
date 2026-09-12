@@ -20,7 +20,7 @@ steps:
         TAG="${TAG_NAME#zonos-}"
         docker buildx build \
           --platform=linux/amd64 \
-          --tag=aafactory/zonos-server:$$TAG \
+          --tag=elliotcarery/zonos-server:$$TAG \
           --push \
           -f dockerfile \
           .

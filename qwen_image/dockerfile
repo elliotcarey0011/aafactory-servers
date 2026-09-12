@@ -16,7 +16,6 @@ RUN pip install uv
 COPY . /app/
 
 RUN uv sync
-RUN uv run pip install git+https://github.com/huggingface/diffusers
 
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
