@@ -1,0 +1,9 @@
+{
+  "input": {
+    "task_name": "text_to_image",
+    "positive_prompt": "a cat wearing sunglasses",
+    "negative_prompt": "bad hands, bad anatomy, ugly, deformed",
+    "image_ratio": "1:1",
+    "image_quality": "high"
+  }
+}
