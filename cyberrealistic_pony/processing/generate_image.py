@@ -10,8 +10,12 @@ import base64
 # / unet / vae / text_encoder folders) — it's a stack of single-file Civitai
 # checkpoints. Pin one specific version rather than tracking "latest" so a
 # new upload to the repo can't silently change the model underneath us.
+#
+# Must be a "blob/main/" URL, not "resolve/main/" — diffusers' from_single_file
+# does its own resolve-URL construction from a blob URL, so passing a
+# resolve URL here gets "resolve/main/" appended twice and 404s.
 CHECKPOINT_URL = (
-    "https://huggingface.co/cyberdelia/CyberRealisticPony/resolve/main/"
+    "https://huggingface.co/cyberdelia/CyberRealisticPony/blob/main/"
     "CyberRealisticPony_V18.0_FP16.safetensors"
 )
 
