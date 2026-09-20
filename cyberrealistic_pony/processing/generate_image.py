@@ -14,9 +14,13 @@ import base64
 # Must be a "blob/main/" URL, not "resolve/main/" — diffusers' from_single_file
 # does its own resolve-URL construction from a blob URL, so passing a
 # resolve URL here gets "resolve/main/" appended twice and 404s.
+#
+# Filename is "_F16" (no "P"), not "_FP16" like every earlier version on
+# this repo — a naming inconsistency in the V18.0 upload itself, confirmed
+# against the repo's actual file listing.
 CHECKPOINT_URL = (
     "https://huggingface.co/cyberdelia/CyberRealisticPony/blob/main/"
-    "CyberRealisticPony_V18.0_FP16.safetensors"
+    "CyberRealisticPony_V18.0_F16.safetensors"
 )
 
 # Loaded once per worker process and reused across every request, instead of
