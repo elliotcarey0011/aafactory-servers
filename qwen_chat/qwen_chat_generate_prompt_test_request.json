@@ -1,0 +1,7 @@
+{
+  "input": {
+    "task_name": "generate_prompt",
+    "subject": "a woman sitting by a rain-streaked window at night",
+    "style_hints": "cinematic lighting, shallow depth of field, photorealistic"
+  }
+}
