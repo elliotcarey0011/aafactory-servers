@@ -1,0 +1,28 @@
+[project]
+name = "cyberrealistic-pony"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "accelerate>=1.10.1",
+    "celery>=5.5.3",
+    "diffusers>=0.31.0",
+    "pip>=25.2",
+    "redis>=6.4.0",
+    # Pinned (not >=) to match the Dockerfile's base image
+    # (pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel) exactly. An unpinned
+    # lower bound here lets `uv sync` pull whatever the latest torch release
+    # is at build time - which bundles its own CUDA runtime and can demand a
+    # newer driver than the base image (or most RunPod hosts) provide,
+    # causing "NVIDIA driver on your system is too old" at pipe.to("cuda")
+    # regardless of which physical GPU it lands on.
+    # CUDA 12.8 (not 12.4) specifically because torch's cu124/cu126 builds
+    # have no kernels for NVIDIA Blackwell (sm_120, e.g. RTX PRO 6000
+    # Blackwell) - only cu128+ wheels do, which is also PyPI's default for
+    # torch>=2.9.0.
+    "torch==2.9.0",
+    "transformers>=4.56.2",
+    "torchvision==0.24.0",
+    "runpod>=1.7.0",
+]
