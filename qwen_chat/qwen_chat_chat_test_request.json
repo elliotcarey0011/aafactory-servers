@@ -1,0 +1,10 @@
+{
+  "input": {
+    "task_name": "chat",
+    "messages": [
+      { "role": "user", "content": "What's a good way to light a portrait for a moody, cinematic look?" }
+    ],
+    "max_tokens": 256,
+    "temperature": 0.7
+  }
+}
