@@ -49,16 +49,22 @@ documented in `cyberrealistic_pony/README.md`. Both tasks return
 
 ## Model
 
-[`Qwen/Qwen2.5-3B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct) —
-chosen over similarly-sized alternatives (e.g. Llama-3.2-3B-Instruct) for two
-reasons:
-- **License**: Apache-2.0, with no usage restrictions — Meta's Llama license
-  carries an Acceptable Use Policy that restricts sexual content, which
-  conflicts with this app (`aafactory_nsfw`) generating NSFW content.
-- **Consistency**: Qwen is already used elsewhere in this repo
-  (`qwen_image`, and `infinite_talk`'s `prompt_extend.py` for prompt
-  expansion), and is small enough (~6GB in bf16) for a fast cold start with
-  no quantization needed.
+[`knoveleng/Qwen2.5-3B-Instruct-Uncensored`](https://huggingface.co/knoveleng/Qwen2.5-3B-Instruct-Uncensored) —
+an abliterated (refusal-removed) fine-tune of `Qwen/Qwen2.5-3B-Instruct`,
+chosen over the base instruct model and similarly-sized alternatives (e.g.
+Llama-3.2-3B-Instruct) for three reasons:
+- **Won't refuse NSFW requests**: the base Qwen2.5-3B-Instruct model can
+  decline prompt-writing requests it judges NSFW, which directly conflicts
+  with what this server exists to do for `aafactory_nsfw`. This variant has
+  had that refusal behavior removed at the weight level.
+- **License**: the model card states it "inherits obligations from" the
+  base model, i.e. stays under Qwen2.5-3B-Instruct's Apache-2.0 license —
+  no usage restrictions, unlike Meta's Llama license, which carries an
+  Acceptable Use Policy that restricts sexual content.
+- **Consistency**: still a 3B Qwen2.5 checkpoint, same size/architecture as
+  the base model, so it's just as fast to cold-start and matches the Qwen
+  models already used elsewhere in this repo (`qwen_image`, and
+  `infinite_talk`'s `prompt_extend.py` for prompt expansion).
 
 The model is loaded once per worker process and reused across every
 request (see `_MODEL`/`_TOKENIZER` in `processing/generate_text.py`) rather

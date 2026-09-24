@@ -3,7 +3,12 @@ from typing import Callable, Optional
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
+# Abliterated (refusal-removed) fine-tune of Qwen2.5-3B-Instruct - the base
+# instruct model can refuse NSFW prompt-writing requests, which this server
+# exists specifically to handle. Inherits Qwen2.5-3B-Instruct's Apache-2.0
+# obligations (see the model card), so the licensing rationale for choosing
+# Qwen over Llama still holds.
+MODEL_NAME = "knoveleng/Qwen2.5-3B-Instruct-Uncensored"
 
 # aafactory_nsfw expects image prompts written in the SDXL/Pony tag
 # convention documented in cyberrealistic_pony/README.md and
