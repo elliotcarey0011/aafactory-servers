@@ -1,0 +1,27 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ARG BUILD_ENV=local
+ENV BUILD_ENV=${BUILD_ENV}
+
+# No CUDA/torch base image needed here, unlike the other servers in this
+# repo — MiniMax-H3 inference runs remotely on fal-ai via HuggingFace's
+# Inference Providers API, this container only proxies requests to it.
+RUN apt-get update && \
+    apt-get install -y \
+    redis-server \
+    git && rm -rf /var/lib/apt/lists/*
+
+RUN pip install uv
+
+COPY . /app/
+
+RUN uv sync
+
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENV PYTHONBUFFERED=1
+
+ENTRYPOINT ["/app/entrypoint.sh"]

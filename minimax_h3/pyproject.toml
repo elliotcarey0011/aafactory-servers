@@ -1,0 +1,13 @@
+[project]
+name = "minimax-h3"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "celery>=5.5.3",
+    "huggingface-hub>=0.35.0",
+    "pip>=25.2",
+    "redis>=6.4.0",
+    "runpod>=1.7.0",
+]
