@@ -19,6 +19,12 @@ dependencies = [
     "huggingface-hub>=0.35.0",
     "pillow>=11.0.0",
     "pip>=25.2",
+    # pipe.transformer.load_lora_adapter() (see _get_pipe() in
+    # processing/generate_video.py) imports this internally - diffusers
+    # doesn't declare it as a hard dependency since not every pipeline uses
+    # LoRA, so it has to be listed here explicitly. Caught from a real
+    # worker log (ModuleNotFoundError), not the diffusers docs.
+    "peft>=0.17.0",
     "redis>=6.4.0",
     "runpod>=1.7.0",
     "safetensors>=0.4.5",
