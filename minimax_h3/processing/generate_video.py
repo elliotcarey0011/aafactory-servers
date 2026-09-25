@@ -75,27 +75,46 @@ def _convert_ai_toolkit_lora_state_dict(state_dict: dict) -> dict:
       [14336, 16], and fc2.lora_A's input dim (14336) matches that half
       size, confirming the SwiGLU gate/value split point.
     - mlp.fc2 -> ff.net.2: straight rename, no split.
+    - blocks.N -> transformer_blocks.N, and token_refiner.blocks.N ->
+      token_refiner.refiner_blocks.N: the checkpoint's block-container
+      names, unchanged by the diffusers port itself - the same renames
+      diffusers' own scripts/convert_minimax_h3_to_diffusers.py applies
+      when converting the original (ai-toolkit-compatible) checkpoint
+      layout to diffusers' MiniMaxH3Transformer3DModel, which defines
+      the stacks as `self.transformer_blocks` and
+      `self.token_refiner.refiner_blocks`. Confirmed necessary from a
+      real worker log: without this, the four renames above still leave
+      keys like "blocks.43.attn.to_q...", which PEFT can't find on the
+      model and rejects with "Target modules {...} not found in the
+      base model" - the bare `to_q`/`to_out.0`/etc. names alone aren't
+      enough, they need to resolve under the right container path too.
 
-    Any key not matching one of these four patterns passes through
-    unchanged (none exist in the one LoRA this was built against - its
-    416 tensors are 100% covered by exactly these four patterns across
-    50 `blocks` + 2 `token_refiner.blocks` - but a future differently-
-    trained LoRA might have others, e.g. AdaLN, and should fail through
-    load_lora_adapter's own prefix filtering rather than being silently
-    dropped here).
+    Any key not matching one of these four attention/FFN patterns passes
+    through unchanged, aside from the blocks-path rename above (none
+    exist in the one LoRA this was built against - its 416 tensors are
+    100% covered by exactly these four patterns across 50 `blocks` + 2
+    `token_refiner.blocks` - but a future differently-trained LoRA might
+    have others, e.g. AdaLN, and should fail through load_lora_adapter's
+    own prefix filtering rather than being silently dropped here).
 
     This has NOT been validated against this LoRA's actual generation
     output (no local GPU available to test against) - only against the
-    "target modules not found" failure this fixes and the InstantX
-    precedent for the identical conversion on the same model family.
-    Confirm the LoRA is visibly having an effect on a real generation
-    before trusting this blindly.
+    "target modules not found" failures this fixes and the InstantX
+    precedent for the identical to_q/to_k/to_v/to_out/ff conversion on
+    the same model family. Confirm the LoRA is visibly having an effect
+    on a real generation before trusting this blindly.
     """
+
+    def _rename_block_path(block: str) -> str:
+        if ".token_refiner.blocks." in block:
+            return block.replace(".token_refiner.blocks.", ".token_refiner.refiner_blocks.", 1)
+        return block.replace(".blocks.", ".transformer_blocks.", 1)
+
     converted: dict = {}
     for key, tensor in state_dict.items():
         match = _QKV_KEY_RE.match(key)
         if match:
-            block, part = match["block"], match["part"]
+            block, part = _rename_block_path(match["block"]), match["part"]
             if part == "lora_A":
                 for target in ("to_q", "to_k", "to_v"):
                     converted[f"{block}.attn.{target}.lora_A.weight"] = tensor
@@ -108,13 +127,13 @@ def _convert_ai_toolkit_lora_state_dict(state_dict: dict) -> dict:
 
         match = _OUT_PROJ_KEY_RE.match(key)
         if match:
-            block, part = match["block"], match["part"]
+            block, part = _rename_block_path(match["block"]), match["part"]
             converted[f"{block}.attn.to_out.0.{part}.weight"] = tensor
             continue
 
         match = _FC1_KEY_RE.match(key)
         if match:
-            block, part = match["block"], match["part"]
+            block, part = _rename_block_path(match["block"]), match["part"]
             if part == "lora_A":
                 converted[f"{block}.ff.net.0.proj.lora_A.weight"] = tensor
             else:
@@ -124,7 +143,7 @@ def _convert_ai_toolkit_lora_state_dict(state_dict: dict) -> dict:
 
         match = _FC2_KEY_RE.match(key)
         if match:
-            block, part = match["block"], match["part"]
+            block, part = _rename_block_path(match["block"]), match["part"]
             converted[f"{block}.ff.net.2.{part}.weight"] = tensor
             continue
 
