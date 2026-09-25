@@ -29,12 +29,21 @@ def image_to_video(
     def _report_progress(step, total_steps):
         self.update_state(state="PROGRESS", meta={"step": step, "total_steps": total_steps})
 
+    # Fired if generation hits the known transient GPU allocator error (see
+    # _call_pipe_with_retry in processing/generate_video.py) and is being
+    # retried - a custom Celery state, so callers polling AsyncResult.state
+    # see "RETRYING" (with the reason in .info) instead of the task just
+    # going quiet mid-run.
+    def _report_status(message):
+        self.update_state(state="RETRYING", meta={"message": message})
+
     result = run_image_to_video(
         image_bytes=image_bytes,
         prompt=prompt,
         num_frames=num_frames,
         seed=seed,
         progress_callback=_report_progress,
+        status_callback=_report_status,
     )
     return result.decode("utf-8")
 
@@ -50,11 +59,15 @@ def reference_to_video(
     def _report_progress(step, total_steps):
         self.update_state(state="PROGRESS", meta={"step": step, "total_steps": total_steps})
 
+    def _report_status(message):
+        self.update_state(state="RETRYING", meta={"message": message})
+
     result = run_reference_to_video(
         reference_images=reference_images,
         prompt=prompt,
         num_frames=num_frames,
         seed=seed,
         progress_callback=_report_progress,
+        status_callback=_report_status,
     )
     return result.decode("utf-8")

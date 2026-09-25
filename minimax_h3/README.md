@@ -48,6 +48,23 @@ Fix: attach a RunPod Network Volume sized for at least ~200GB (185GB of
 weights + the 155MB LoRA + working room) to the endpoint, so
 `entrypoint.sh` redirects `HF_HOME` there instead.
 
+### Troubleshooting: `NVML_SUCCESS == r INTERNAL ASSERT FAILED` during generation
+
+A known PyTorch/NVML bug ([pytorch#112950](https://github.com/pytorch/pytorch/issues/112950),
+[pytorch#123834](https://github.com/pytorch/pytorch/issues/123834)), not
+caused by anything in this server - `ComponentsManager`'s auto-offload
+hooks intermittently hit it when moving a component onto the GPU mid-call,
+on a host with a flaky NVML/driver state. `processing/generate_video.py`'s
+`_call_pipe_with_retry` retries the generation call once in-process (the
+already-loaded `_PIPE` isn't reloaded) when it sees this specific error,
+and reports the retry through whichever status channel the caller wired up
+(`status_callback` - Celery task state `"RETRYING"` in `celery_worker.py`,
+a `{"status": ...}` progress update in `handler.py`). If it still fails
+after that, it's likely the host itself is persistently broken; RunPod
+routing the next request to a different worker is the usual next step, and
+persistent failures across many workers are worth reporting to RunPod as a
+bad GPU node.
+
 # Running as a RunPod Serverless worker
 
 Same image, different entrypoint mode — set `WORKER_MODE=serverless` as an

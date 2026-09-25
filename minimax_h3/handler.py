@@ -26,7 +26,17 @@ def handler(job):
             job, {"step": step, "total_steps": total_steps}
         )
 
-    result = run_task(**job_input, progress_callback=_report_progress)
+    # Fired if generation hits the known transient GPU allocator error (see
+    # _call_pipe_with_retry in processing/generate_video.py) and is being
+    # retried - surfaced through the same progress channel as
+    # _report_progress above so it's visible to RunPod's /status polling
+    # instead of only showing up in worker logs.
+    def _report_status(message):
+        runpod.serverless.progress_update(job, {"status": message})
+
+    result = run_task(
+        **job_input, progress_callback=_report_progress, status_callback=_report_status
+    )
     return {"video_base64": result.decode("utf-8")}
 
 

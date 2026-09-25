@@ -240,6 +240,42 @@ def _get_pipe() -> ModularPipeline:
     return _PIPE
 
 
+# `ComponentsManager`'s auto-offload hooks intermittently hit a known
+# PyTorch/NVML bug when moving a component onto the GPU mid-`pipe(...)` call
+# - not anything wrong with this server's code, see
+# https://github.com/pytorch/pytorch/issues/112950 and
+# https://github.com/pytorch/pytorch/issues/123834. Confirmed from three
+# separate real worker logs (three different RunPod workers/hosts, at three
+# different times), always from the exact same `module.to(execution_device)`
+# call inside `pipe(...)`, never from `_get_pipe()`'s own one-time load - so
+# a bare retry of just the generation call (reusing the already-loaded
+# `_PIPE`, no reload) is enough when the underlying host isn't persistently
+# broken, which those GitHub issues suggest is the common case.
+_GPU_ALLOCATOR_RETRY_ATTEMPTS = 2
+
+
+def _is_nvml_allocator_error(exc: BaseException) -> bool:
+    return isinstance(exc, RuntimeError) and "NVML_SUCCESS" in str(exc)
+
+
+def _call_pipe_with_retry(
+    pipe: ModularPipeline,
+    status_callback: Optional[Callable[[str], None]],
+    **pipe_kwargs,
+) -> dict:
+    for attempt in range(1, _GPU_ALLOCATOR_RETRY_ATTEMPTS + 1):
+        try:
+            return pipe(**pipe_kwargs)
+        except RuntimeError as exc:
+            if attempt == _GPU_ALLOCATOR_RETRY_ATTEMPTS or not _is_nvml_allocator_error(exc):
+                raise
+            if status_callback:
+                status_callback(
+                    "GPU allocator error (NVML) during generation, retrying "
+                    f"(attempt {attempt + 1}/{_GPU_ALLOCATOR_RETRY_ATTEMPTS})"
+                )
+
+
 def _results_to_base64_video(results: dict) -> bytes:
     with tempfile.NamedTemporaryFile(suffix=".mp4") as tmp:
         encode_video(
@@ -259,6 +295,7 @@ def run_image_to_video(
     num_frames: int = DEFAULT_NUM_FRAMES,
     seed: Optional[int] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    status_callback: Optional[Callable[[str], None]] = None,
 ) -> bytes:
     """fl2va: the given image becomes the video's literal starting frame -
     the prompt describes motion/continuation from it, and can't reinterpret
@@ -277,6 +314,12 @@ def run_image_to_video(
             guidance-distilled (no guider, no negative_prompt, no
             guidance_scale - baked into the weights) and the modular blocks
             expose no per-step hook, so this only fires once on completion.
+        status_callback: optional, fired with a human-readable message if
+            generation hits the known NVML allocator error (see
+            _call_pipe_with_retry) and is being retried - lets the caller
+            surface that back through its own status channel (Celery task
+            state, RunPod progress updates) instead of it only showing up
+            in worker logs.
 
     Returns:
         bytes: base64-encoded MP4, with its synchronized audio track muxed
@@ -289,7 +332,9 @@ def run_image_to_video(
 
     generator = torch.Generator().manual_seed(seed) if seed is not None else torch.Generator()
 
-    results = pipe(
+    results = _call_pipe_with_retry(
+        pipe,
+        status_callback,
         prompt=prompt,
         image=input_image,
         num_frames=num_frames,
@@ -309,6 +354,7 @@ def run_reference_to_video(
     num_frames: int = DEFAULT_NUM_FRAMES,
     seed: Optional[int] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    status_callback: Optional[Callable[[str], None]] = None,
 ) -> bytes:
     """ref2va: unlike run_image_to_video's fl2va, these images are labeled
     references the prompt can explicitly address, not a literal starting
@@ -331,7 +377,8 @@ def run_reference_to_video(
         prompt: text prompt, referencing images by "<Picture N>" tags where
             wanted - the model doesn't infer which reference is meant
             without one.
-        num_frames, seed, progress_callback: see run_image_to_video.
+        num_frames, seed, progress_callback, status_callback: see
+            run_image_to_video.
 
     Returns:
         bytes: base64-encoded MP4, with its synchronized audio track muxed
@@ -356,7 +403,9 @@ def run_reference_to_video(
 
     generator = torch.Generator().manual_seed(seed) if seed is not None else torch.Generator()
 
-    results = pipe(
+    results = _call_pipe_with_retry(
+        pipe,
+        status_callback,
         prompt=prompt,
         references=references,
         num_frames=num_frames,
