@@ -88,6 +88,7 @@ its content onto a different subject or scene.
     "image_bytes": "<base64-encoded first-frame image>",
     "prompt": "The subject starts to dance",
     "num_frames": 124,
+    "num_inference_steps": 50,
     "seed": null
   }
 }
@@ -108,6 +109,7 @@ requests like "use the face from this photo on a German soldier":
     "reference_images": ["<base64-encoded reference image>"],
     "prompt": "<Picture 1> as a German WWII soldier, standing at attention in a snowy trench, cinematic lighting",
     "num_frames": 124,
+    "num_inference_steps": 50,
     "seed": null
   }
 }
@@ -125,7 +127,10 @@ ratios.
 
 `num_frames` is optional (defaults to 124, ≈5.2s at MiniMax-H3's fixed
 24fps) and gets snapped up to the next `17 * n + 5` the video VAE can
-decode; the resulting clip must land between 5 and 15 seconds. There's no
+decode; the resulting clip must land between 5 and 15 seconds.
+`num_inference_steps` is optional (defaults to 50, diffusers' own default
+for every Modular Diffusers pipeline — MiniMax-H3 doesn't override it): a
+quality/speed knob, more steps for quality, fewer for speed. There's no
 `negative_prompt` — MiniMax-H3's released checkpoints are
 guidance-distilled, so there's no guider/CFG at all, unlike the other
 image servers in this repo.

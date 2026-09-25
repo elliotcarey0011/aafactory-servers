@@ -1,5 +1,6 @@
 from processing.generate_video import (
     DEFAULT_NUM_FRAMES,
+    DEFAULT_NUM_INFERENCE_STEPS,
     run_image_to_video,
     run_reference_to_video,
 )
@@ -24,6 +25,7 @@ def image_to_video(
     image_bytes: str,
     prompt: str,
     num_frames: int = DEFAULT_NUM_FRAMES,
+    num_inference_steps: int = DEFAULT_NUM_INFERENCE_STEPS,
     seed: int | None = None,
 ) -> str:
     def _report_progress(step, total_steps):
@@ -41,6 +43,7 @@ def image_to_video(
         image_bytes=image_bytes,
         prompt=prompt,
         num_frames=num_frames,
+        num_inference_steps=num_inference_steps,
         seed=seed,
         progress_callback=_report_progress,
         status_callback=_report_status,
@@ -54,6 +57,7 @@ def reference_to_video(
     reference_images: list[str],
     prompt: str,
     num_frames: int = DEFAULT_NUM_FRAMES,
+    num_inference_steps: int = DEFAULT_NUM_INFERENCE_STEPS,
     seed: int | None = None,
 ) -> str:
     def _report_progress(step, total_steps):
@@ -66,6 +70,7 @@ def reference_to_video(
         reference_images=reference_images,
         prompt=prompt,
         num_frames=num_frames,
+        num_inference_steps=num_inference_steps,
         seed=seed,
         progress_callback=_report_progress,
         status_callback=_report_status,

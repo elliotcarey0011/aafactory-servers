@@ -27,6 +27,12 @@ LORA_ADAPTER_NAME = "fingering"
 
 DEFAULT_NUM_FRAMES = 124  # ~5.2s at MiniMax-H3's fixed 24fps - see run_image_to_video's docstring.
 MAX_REFERENCE_IMAGES = 9  # MiniMax-H3's own ref2va limit.
+# diffusers' own default for every Modular Diffusers pipeline's
+# num_inference_steps (modular_pipeline_utils.py's generic InputParam
+# template) - MiniMax-H3's before_denoise.py doesn't override it. Both
+# transformer partitions are guidance-distilled (no guider/CFG), so this is
+# purely a quality/speed knob, not a correctness one.
+DEFAULT_NUM_INFERENCE_STEPS = 50
 
 # Built once per worker process and reused across every request, instead of
 # reloading weights on every single job - mirrors the _MODEL/_PIPES caching
@@ -293,6 +299,7 @@ def run_image_to_video(
     image_bytes: str,
     prompt: str,
     num_frames: int = DEFAULT_NUM_FRAMES,
+    num_inference_steps: int = DEFAULT_NUM_INFERENCE_STEPS,
     seed: Optional[int] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     status_callback: Optional[Callable[[str], None]] = None,
@@ -308,6 +315,13 @@ def run_image_to_video(
         num_frames: frame count at MiniMax-H3's fixed 24fps. Snapped up to
             the next `17 * n + 5` the video VAE can decode; the resulting
             clip duration must land between 5 and 15 seconds.
+        num_inference_steps: denoising step count (sigma grid points,
+            terminal 0 included - see the diffusers MiniMax-H3 docs'
+            "Generation constraints" section - so this drives one fewer
+            model evaluation than the number given). Both transformer
+            partitions are guidance-distilled (no guider/CFG), so this is
+            purely a quality/speed knob: fewer steps trades quality for a
+            faster generation, more steps the reverse.
         seed: optional, for reproducible generations.
         progress_callback: optional, kept for interface parity with the
             other servers' per-step reporting. MiniMax-H3's checkpoints are
@@ -338,6 +352,7 @@ def run_image_to_video(
         prompt=prompt,
         image=input_image,
         num_frames=num_frames,
+        num_inference_steps=num_inference_steps,
         generator=generator,
         output=["videos", "audio", "sampling_rate"],
     )
@@ -352,6 +367,7 @@ def run_reference_to_video(
     reference_images: List[str],
     prompt: str,
     num_frames: int = DEFAULT_NUM_FRAMES,
+    num_inference_steps: int = DEFAULT_NUM_INFERENCE_STEPS,
     seed: Optional[int] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     status_callback: Optional[Callable[[str], None]] = None,
@@ -377,8 +393,8 @@ def run_reference_to_video(
         prompt: text prompt, referencing images by "<Picture N>" tags where
             wanted - the model doesn't infer which reference is meant
             without one.
-        num_frames, seed, progress_callback, status_callback: see
-            run_image_to_video.
+        num_frames, num_inference_steps, seed, progress_callback,
+            status_callback: see run_image_to_video.
 
     Returns:
         bytes: base64-encoded MP4, with its synchronized audio track muxed
@@ -409,6 +425,7 @@ def run_reference_to_video(
         prompt=prompt,
         references=references,
         num_frames=num_frames,
+        num_inference_steps=num_inference_steps,
         generator=generator,
         output=["videos", "audio", "sampling_rate"],
     )
