@@ -1,4 +1,4 @@
-from processing.generate_video import run_image_to_video
+from processing.generate_video import DEFAULT_NUM_FRAMES, run_image_to_video
 
 from celery import Celery
 import os
@@ -19,8 +19,7 @@ def image_to_video(
     self,
     image_bytes: str,
     prompt: str,
-    negative_prompt: str | None = None,
-    num_frames: float | None = None,
+    num_frames: int = DEFAULT_NUM_FRAMES,
     seed: int | None = None,
 ) -> str:
     def _report_progress(step, total_steps):
@@ -29,7 +28,6 @@ def image_to_video(
     result = run_image_to_video(
         image_bytes=image_bytes,
         prompt=prompt,
-        negative_prompt=negative_prompt,
         num_frames=num_frames,
         seed=seed,
         progress_callback=_report_progress,

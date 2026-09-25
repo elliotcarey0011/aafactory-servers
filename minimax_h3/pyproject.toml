@@ -5,9 +5,30 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "accelerate>=1.10.1",
+    # Needed for encode_video()'s audio+video muxing, and for decoding
+    # video/audio reference files elsewhere in MiniMax-H3's modular blocks.
+    "av>=13.0.0",
     "celery>=5.5.3",
+    # MiniMax-H3's Modular Diffusers integration (ModularPipeline,
+    # MiniMaxH3Transformer3DModel, ComponentsManager auto-offload, etc.) is
+    # very recent and, as of this writing, lives on diffusers' main branch -
+    # pin to git until it ships in a tagged PyPI release, then switch this
+    # to a normal version bound.
+    "diffusers @ git+https://github.com/huggingface/diffusers.git",
     "huggingface-hub>=0.35.0",
+    "pillow>=11.0.0",
     "pip>=25.2",
     "redis>=6.4.0",
     "runpod>=1.7.0",
+    "safetensors>=0.4.5",
+    # Qwen3-VL (the MiniMax-H3 conditioner) needs a transformers release
+    # recent enough to know about it.
+    "transformers>=4.57.0",
+    # Pinned (not >=) to match the Dockerfile's base image
+    # (pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel) exactly - see the
+    # identical comment in cyberrealistic_pony/pyproject.toml /
+    # qwen_chat/pyproject.toml for why (CUDA 12.8 specifically for
+    # Blackwell (sm_120) kernel support).
+    "torch==2.9.0",
 ]
