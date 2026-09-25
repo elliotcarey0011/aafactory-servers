@@ -1,5 +1,6 @@
 {
   "input": {
+    "task_name": "image_to_video",
     "image_bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
     "prompt": "The subject starts to dance",
     "num_frames": 124,

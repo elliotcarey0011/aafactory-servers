@@ -1,0 +1,11 @@
+{
+  "input": {
+    "task_name": "reference_to_video",
+    "reference_images": [
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    ],
+    "prompt": "<Picture 1> as a German WWII soldier, standing at attention in a snowy trench, cinematic lighting",
+    "num_frames": 124,
+    "seed": null
+  }
+}

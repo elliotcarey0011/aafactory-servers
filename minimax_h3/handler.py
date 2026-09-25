@@ -1,23 +1,23 @@
 import runpod
 
-from processing.generate_video import run_image_to_video
+from processing.generate_video import run_image_to_video, run_reference_to_video
+
+_TASKS = {
+    "image_to_video": run_image_to_video,
+    "reference_to_video": run_reference_to_video,
+}
 
 
 def handler(job):
     """RunPod Serverless entry point. `job["input"]` mirrors the kwargs
-    already sent to the `image_to_video` Celery task (see celery_worker.py)
-    — same payload shape, different transport, so the aafactory_nsfw
-    backend can dispatch to either without changing what it sends.
-
-    aafactory_nsfw's runpod_serverless.py always folds a `task_name` key
-    into the RunPod job input (submit_job's `{**payload, "task_name":
-    task_name}`), even for a single-task server like this one — it's only
-    meaningful for a server with more than one task type (see
-    qwen_chat/qwen_image's handler.py, which dispatch on it). Popped and
-    discarded here so it isn't forwarded as an unexpected kwarg.
+    already sent to the matching Celery task in celery_worker.py, plus a
+    `task_name` key (added by aafactory_nsfw's runpod_serverless.py) that
+    tells us which of this server's two task types to run — see
+    qwen_chat/qwen_image's handler.py for the same pattern.
     """
     job_input = dict(job["input"])
-    job_input.pop("task_name", None)
+    task_name = job_input.pop("task_name")
+    run_task = _TASKS[task_name]
 
     # Surfaced back through RunPod's own /status polling — see
     # aafactory_nsfw's backend/runpod_serverless.py for the reader side.
@@ -26,7 +26,7 @@ def handler(job):
             job, {"step": step, "total_steps": total_steps}
         )
 
-    result = run_image_to_video(**job_input, progress_callback=_report_progress)
+    result = run_task(**job_input, progress_callback=_report_progress)
     return {"video_base64": result.decode("utf-8")}
 
 
