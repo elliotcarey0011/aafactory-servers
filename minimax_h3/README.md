@@ -168,10 +168,15 @@ left un-adapted; applying this same state dict there is untested and not
 assumed to be safe, so `reference_to_video` currently runs the stock
 model with no fine-tune.
 
-I did not confirm the exact key-prefix convention the trainer that
-produced this checkpoint used against `load_lora_adapter`'s default
-`prefix="transformer"` filtering — if loading fails with an "unexpected
-keys" style error, that's the first thing to check.
+This checkpoint was trained with [ai-toolkit](https://github.com/ostris/ai-toolkit)
+(per its own `__metadata__`), which exports denoiser LoRA keys prefixed
+`diffusion_model.` rather than diffusers' own `transformer.` convention
+that `load_lora_adapter`'s default prefix filtering expects — confirmed
+from a real worker log, where it silently matched **zero** keys (logged,
+not raised: `No LoRA keys associated to MiniMaxH3Transformer3DModel found
+with the prefix='transformer'`) and the LoRA quietly never applied at
+all. `_get_pipe()` renames the `diffusion_model.` prefix to `transformer.`
+on the loaded state dict before calling `load_lora_adapter()` to fix this.
 
 ### A note on freshness
 

@@ -95,6 +95,21 @@ def _get_pipe() -> ModularPipeline:
         # dict to transformer_ref is untested and not assumed to be safe.
         lora_path = hf_hub_download(repo_id=LORA_REPO_ID, filename=LORA_FILENAME)
         lora_state_dict = load_safetensors(lora_path)
+        # This checkpoint's own __metadata__ (software: ai-toolkit,
+        # https://github.com/ostris/ai-toolkit) confirms it was trained
+        # with ai-toolkit, which exports denoiser LoRA keys prefixed
+        # "diffusion_model." (e.g. "diffusion_model.blocks.0.attn...") -
+        # not diffusers' own "transformer." convention that
+        # load_lora_adapter's default prefix filtering expects. Without
+        # this rename it silently matches zero keys (logged as "No LoRA
+        # keys associated to MiniMaxH3Transformer3DModel found with the
+        # prefix='transformer'" rather than raising), so the LoRA quietly
+        # never applies at all - confirmed from a real worker log, not
+        # speculation.
+        lora_state_dict = {
+            key.replace("diffusion_model.", "transformer.", 1): value
+            for key, value in lora_state_dict.items()
+        }
         pipe.transformer.load_lora_adapter(lora_state_dict, adapter_name=LORA_ADAPTER_NAME)
         pipe.transformer.set_adapters([LORA_ADAPTER_NAME])
 
