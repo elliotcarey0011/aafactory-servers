@@ -1,4 +1,5 @@
 import base64
+import re
 import tempfile
 from io import BytesIO
 from pathlib import Path
@@ -33,6 +34,103 @@ MAX_REFERENCE_IMAGES = 9  # MiniMax-H3's own ref2va limit.
 # qwen_image/processing/generate_image.py, just for a ModularPipeline
 # instead of a plain model/DiffusionPipeline.
 _PIPE: Optional[ModularPipeline] = None
+
+_QKV_KEY_RE = re.compile(r"^(?P<block>.+)\.attn\.qkv_proj\.(?P<part>lora_[AB])\.weight$")
+_OUT_PROJ_KEY_RE = re.compile(r"^(?P<block>.+)\.attn\.out_proj\.(?P<part>lora_[AB])\.weight$")
+_FC1_KEY_RE = re.compile(r"^(?P<block>.+)\.mlp\.fc1\.(?P<part>lora_[AB])\.weight$")
+_FC2_KEY_RE = re.compile(r"^(?P<block>.+)\.mlp\.fc2\.(?P<part>lora_[AB])\.weight$")
+
+
+def _convert_ai_toolkit_lora_state_dict(state_dict: dict) -> dict:
+    """Converts an ai-toolkit-trained MiniMax-H3 LoRA (the "native",
+    ComfyUI-style fused architecture ai-toolkit and several community
+    checkpoints target) into the module names and tensor layout diffusers'
+    MiniMaxH3Transformer3DModel (separate to_q/to_k/to_v, diffusers'
+    SwiGLU feedforward) actually expects.
+
+    Confirmed necessary from a real worker log: a plain rename of the
+    "diffusion_model." key prefix to "transformer." got load_lora_adapter
+    to actually attempt injection, but PEFT then failed with "Target
+    modules {'qkv_proj', 'fc1', 'fc2', 'out_proj'} not found in the base
+    model" - diffusers' attention has no fused qkv_proj (it's separate
+    to_q/to_k/to_v Linears) and its FeedForward's SwiGLU up-projection
+    orders its two halves differently than ai-toolkit's fc1 does. The
+    recipe below matches the one published for
+    huggingface.co/InstantX/MiniMax-H3-Turbo-Lora-Diffusers, which needed
+    the identical conversion for the same model family:
+
+    - attn.qkv_proj -> attn.to_q / attn.to_k / attn.to_v: lora_A is
+      shared across all three (it's the fused projection's single input
+      side, unchanged by the split); lora_B's output rows are split into
+      three equal [q; k; v] chunks. This is exact, not approximate - the
+      fused Linear's output *is* those three chunks concatenated, so the
+      same input projection times each output slice reconstructs each
+      per-projection delta exactly. Verified against this LoRA's actual
+      shapes: qkv_proj.lora_B is [21504, 16] = 3 x [7168, 16].
+    - attn.out_proj -> attn.to_out.0: straight rename, no split.
+    - mlp.fc1 -> ff.net.0.proj: lora_B's two halves (each producing half
+      of the SwiGLU inner dimension) are swapped from ai-toolkit's
+      [gate; value] row order to diffusers' [value; gate] order. Verified
+      against this LoRA's shapes: fc1.lora_B is [28672, 16] = 2 x
+      [14336, 16], and fc2.lora_A's input dim (14336) matches that half
+      size, confirming the SwiGLU gate/value split point.
+    - mlp.fc2 -> ff.net.2: straight rename, no split.
+
+    Any key not matching one of these four patterns passes through
+    unchanged (none exist in the one LoRA this was built against - its
+    416 tensors are 100% covered by exactly these four patterns across
+    50 `blocks` + 2 `token_refiner.blocks` - but a future differently-
+    trained LoRA might have others, e.g. AdaLN, and should fail through
+    load_lora_adapter's own prefix filtering rather than being silently
+    dropped here).
+
+    This has NOT been validated against this LoRA's actual generation
+    output (no local GPU available to test against) - only against the
+    "target modules not found" failure this fixes and the InstantX
+    precedent for the identical conversion on the same model family.
+    Confirm the LoRA is visibly having an effect on a real generation
+    before trusting this blindly.
+    """
+    converted: dict = {}
+    for key, tensor in state_dict.items():
+        match = _QKV_KEY_RE.match(key)
+        if match:
+            block, part = match["block"], match["part"]
+            if part == "lora_A":
+                for target in ("to_q", "to_k", "to_v"):
+                    converted[f"{block}.attn.{target}.lora_A.weight"] = tensor
+            else:
+                q, k, v = tensor.chunk(3, dim=0)
+                converted[f"{block}.attn.to_q.lora_B.weight"] = q
+                converted[f"{block}.attn.to_k.lora_B.weight"] = k
+                converted[f"{block}.attn.to_v.lora_B.weight"] = v
+            continue
+
+        match = _OUT_PROJ_KEY_RE.match(key)
+        if match:
+            block, part = match["block"], match["part"]
+            converted[f"{block}.attn.to_out.0.{part}.weight"] = tensor
+            continue
+
+        match = _FC1_KEY_RE.match(key)
+        if match:
+            block, part = match["block"], match["part"]
+            if part == "lora_A":
+                converted[f"{block}.ff.net.0.proj.lora_A.weight"] = tensor
+            else:
+                gate, value = tensor.chunk(2, dim=0)
+                converted[f"{block}.ff.net.0.proj.lora_B.weight"] = torch.cat([value, gate], dim=0)
+            continue
+
+        match = _FC2_KEY_RE.match(key)
+        if match:
+            block, part = match["block"], match["part"]
+            converted[f"{block}.ff.net.2.{part}.weight"] = tensor
+            continue
+
+        converted[key] = tensor
+
+    return converted
 
 
 def _get_pipe() -> ModularPipeline:
@@ -110,6 +208,12 @@ def _get_pipe() -> ModularPipeline:
             key.replace("diffusion_model.", "transformer.", 1): value
             for key, value in lora_state_dict.items()
         }
+        # Renaming the prefix alone isn't enough - see
+        # _convert_ai_toolkit_lora_state_dict's docstring for why (fused
+        # qkv_proj vs. diffusers' separate to_q/to_k/to_v, and an
+        # ai-toolkit-vs-diffusers SwiGLU half-ordering mismatch), also
+        # confirmed from a real worker log.
+        lora_state_dict = _convert_ai_toolkit_lora_state_dict(lora_state_dict)
         pipe.transformer.load_lora_adapter(lora_state_dict, adapter_name=LORA_ADAPTER_NAME)
         pipe.transformer.set_adapters([LORA_ADAPTER_NAME])
 

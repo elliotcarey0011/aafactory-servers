@@ -176,7 +176,27 @@ from a real worker log, where it silently matched **zero** keys (logged,
 not raised: `No LoRA keys associated to MiniMaxH3Transformer3DModel found
 with the prefix='transformer'`) and the LoRA quietly never applied at
 all. `_get_pipe()` renames the `diffusion_model.` prefix to `transformer.`
-on the loaded state dict before calling `load_lora_adapter()` to fix this.
+on the loaded state dict.
+
+That rename alone wasn't enough, though — ai-toolkit trained against
+MiniMax-H3's "native"/ComfyUI-style fused architecture, not diffusers'
+own module layout, so even with the right prefix PEFT failed with
+`Target modules {'qkv_proj', 'fc1', 'fc2', 'out_proj'} not found in the
+base model`. diffusers' attention uses separate `to_q`/`to_k`/`to_v`
+Linears (no fused `qkv_proj`), and its SwiGLU feedforward orders its
+up-projection's two halves differently than ai-toolkit's `fc1` does.
+`_convert_ai_toolkit_lora_state_dict()` (in `processing/generate_video.py`)
+handles this: splits the fused `qkv_proj` LoRA delta into three (shared
+`lora_A`, `lora_B` split into three equal row-chunks — exact, not
+approximate, since a fused Linear's output *is* those three chunks
+concatenated), swaps `fc1`'s two lora_B halves into diffusers' gate/value
+order, and renames `out_proj`/`fc2` straight across. This matches the
+conversion [InstantX/MiniMax-H3-Turbo-Lora-Diffusers](https://huggingface.co/InstantX/MiniMax-H3-Turbo-Lora-Diffusers)
+documents needing for the same model family, and is verified structurally
+against this LoRA's actual tensor shapes (see the function's docstring)
+— but **not** against real generation output (no local GPU to test
+against). Confirm the LoRA is visibly having an effect on a real
+generation before trusting this blindly.
 
 ### A note on freshness
 
