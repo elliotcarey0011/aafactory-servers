@@ -30,6 +30,24 @@ auto CPU offload so this fits on a single **80GB GPU** (e.g. A100/H100
   offload instead, per the diffusers MiniMax-H3 docs' "Memory" section —
   not implemented here, since this server was set up against an 80GB card
 
+### Troubleshooting: `No space left on device` / `NoneType has no attribute 'load_lora_adapter'`
+
+This means **no RunPod Network Volume is attached to the endpoint** — the
+log line to look for is `entrypoint.sh`'s own
+`[entrypoint] No network volume mounted — using default HF cache`. Without
+a volume, `HF_HOME` stays at its default and every download goes to the
+container's own ephemeral disk, which is commonly only ~100-150GB —
+nowhere near the ~185GB this server needs. The download fails partway
+through (often on `text_encoder` or `vae`, whichever happens to be mid-
+transfer when disk fills up), and because `pipe.load_components()` treats
+a failed component load as non-fatal when no `workflow=` is pinned (see
+`_get_pipe()`'s comment), that surfaces later as a confusing
+`AttributeError` instead of the actual disk-space error.
+
+Fix: attach a RunPod Network Volume sized for at least ~200GB (185GB of
+weights + the 155MB LoRA + working room) to the endpoint, so
+`entrypoint.sh` redirects `HF_HOME` there instead.
+
 # Running as a RunPod Serverless worker
 
 Same image, different entrypoint mode — set `WORKER_MODE=serverless` as an

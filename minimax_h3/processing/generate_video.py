@@ -53,6 +53,25 @@ def _get_pipe() -> ModularPipeline:
         manager = ComponentsManager()
         pipe = ModularPipeline.from_pretrained(MODEL_NAME, components_manager=manager)
         pipe.load_components(dtype=torch.bfloat16)
+        # Without a workflow= restriction, diffusers treats a failed
+        # component load as soft (logs "if this component is not required
+        # for your workflow you can safely ignore this message" and leaves
+        # the attribute None) rather than raising - it can't tell what's
+        # actually required until a call comes in. That turned a disk-full
+        # download failure (see README's Hardware/Troubleshooting section)
+        # into a confusing `NoneType has no attribute 'load_lora_adapter'`
+        # a few lines down instead of a clear error here, so check
+        # explicitly for the two components this server actually needs.
+        if pipe.transformer is None or pipe.transformer_ref is None:
+            raise RuntimeError(
+                "MiniMax-H3 pipeline loaded with transformer or transformer_ref "
+                "missing - almost always means a component download failed "
+                "partway (commonly disk space: this needs ~185GB and a RunPod "
+                "Network Volume must be attached, or it downloads to the much "
+                "smaller ephemeral container disk instead - see entrypoint.sh's "
+                "HF_HOME redirect and README's Hardware section). Check the "
+                "worker's earlier logs for 'Failed to create component' lines."
+            )
         # Weights live in host RAM; the manager streams onto the GPU only
         # what each denoising step needs. Required even on an 80GB card,
         # since the transformers + conditioner don't all fit resident at

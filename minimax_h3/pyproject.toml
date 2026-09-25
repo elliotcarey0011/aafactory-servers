@@ -31,4 +31,11 @@ dependencies = [
     # qwen_chat/pyproject.toml for why (CUDA 12.8 specifically for
     # Blackwell (sm_120) kernel support).
     "torch==2.9.0",
+    # Qwen3VLVideoProcessor (part of the MiniMax-H3 conditioner's processor
+    # component) hard-requires this and fails to load without it - caught
+    # from a real worker log, not the diffusers docs. Not pinned to an
+    # exact patch matching torch==2.9.0 above - verify at build time that
+    # `uv sync` doesn't pull a torchvision build with a mismatched CUDA
+    # runtime (see the torch pin's reasoning for why that matters here).
+    "torchvision>=0.24.0",
 ]
