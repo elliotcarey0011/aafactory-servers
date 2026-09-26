@@ -6,7 +6,7 @@ docker run -p 6379:6379 --gpus all -e HF_TOKEN=hf_xxx minimax_h3_server
 
 `HF_TOKEN` must belong to a HuggingFace account that (a) has accepted
 MiniMax-H3's community license (gated download) and (b) has read access to
-the private [`elliotcareydev/minimax-h3-fingering-lora`](https://huggingface.co/elliotcareydev/minimax-h3-fingering-lora)
+the private [`elliotcareydev/minimax-h3-loras`](https://huggingface.co/elliotcareydev/minimax-h3-loras)
 repo — see [Model](#model)/[LoRA](#lora) below.
 
 ## Hardware
@@ -173,11 +173,11 @@ juggling.
 ### LoRA
 
 Two custom fine-tunes are hosted in the same private
-[`elliotcareydev/minimax-h3-fingering-lora`](https://huggingface.co/elliotcareydev/minimax-h3-fingering-lora)
+[`elliotcareydev/minimax-h3-loras`](https://huggingface.co/elliotcareydev/minimax-h3-loras)
 repo:
 
-- [`MinimaxH3-Fingering_000002000.safetensors`](https://huggingface.co/elliotcareydev/minimax-h3-fingering-lora) — adapter name `fingering`
-- [`MinimaxH3-PussySpread_v0.1.safetensors`](https://huggingface.co/elliotcareydev/minimax-h3-fingering-lora) — adapter name `pussy_spread`
+- [`MinimaxH3-Fingering_000002000.safetensors`](https://huggingface.co/elliotcareydev/minimax-h3-loras) — adapter name `fingering`
+- [`MinimaxH3-PussySpread_v0.1.safetensors`](https://huggingface.co/elliotcareydev/minimax-h3-loras) — adapter name `pussy_spread`
 
 Both are ~155MB — over GitHub's 100MB push limit and far bigger than
 anything else in this repo's git history — so instead of committing them,

@@ -25,7 +25,7 @@ MODEL_NAME = "MiniMaxAI/MiniMax-H3"
 # the `lora` param (see LORA_CHOICES / _set_active_loras below) rather than
 # always-on, since the two are unrelated NSFW concepts a caller may want
 # independently, together, or not at all.
-LORA_REPO_ID = "elliotcareydev/minimax-h3-fingering-lora"
+LORA_REPO_ID = "elliotcareydev/minimax-h3-loras"
 LORA_ADAPTER_NAME_FINGERING = "fingering"
 LORA_FILENAME_FINGERING = "MinimaxH3-Fingering_000002000.safetensors"
 LORA_ADAPTER_NAME_PUSSY_SPREAD = "pussy_spread"
