@@ -27,6 +27,7 @@ def image_to_video(
     num_frames: int = DEFAULT_NUM_FRAMES,
     num_inference_steps: int = DEFAULT_NUM_INFERENCE_STEPS,
     seed: int | None = None,
+    lora: str = "fingering",
 ) -> str:
     def _report_progress(step, total_steps):
         self.update_state(state="PROGRESS", meta={"step": step, "total_steps": total_steps})
@@ -45,6 +46,7 @@ def image_to_video(
         num_frames=num_frames,
         num_inference_steps=num_inference_steps,
         seed=seed,
+        lora=lora,
         progress_callback=_report_progress,
         status_callback=_report_status,
     )

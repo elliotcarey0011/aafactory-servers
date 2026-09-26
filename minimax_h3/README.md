@@ -45,7 +45,7 @@ a failed component load as non-fatal when no `workflow=` is pinned (see
 `AttributeError` instead of the actual disk-space error.
 
 Fix: attach a RunPod Network Volume sized for at least ~200GB (185GB of
-weights + the 155MB LoRA + working room) to the endpoint, so
+weights + the two ~155MB LoRAs + working room) to the endpoint, so
 `entrypoint.sh` redirects `HF_HOME` there instead.
 
 ### Troubleshooting: `NVML_SUCCESS == r INTERNAL ASSERT FAILED` during generation
@@ -89,10 +89,16 @@ its content onto a different subject or scene.
     "prompt": "The subject starts to dance",
     "num_frames": 124,
     "num_inference_steps": 50,
-    "seed": null
+    "seed": null,
+    "lora": "fingering"
   }
 }
 ```
+
+`lora` is optional (defaults to `"fingering"`) and picks which of this
+server's custom fine-tunes apply — `"fingering"`, `"pussy_spread"`,
+`"both"`, or `"none"` for the stock model. See [LoRA](#lora) below; it has
+no effect on `reference_to_video`.
 
 ## `reference_to_video` (ref2va)
 
@@ -166,39 +172,49 @@ juggling.
 
 ### LoRA
 
-[`MinimaxH3-Fingering_000002000.safetensors`](https://huggingface.co/elliotcareydev/minimax-h3-fingering-lora)
-is a custom fine-tune, loaded onto the transformer on every request. It's
-155MB — over GitHub's 100MB push limit and far bigger than anything else
-in this repo's git history — so instead of committing it, it's hosted on
-a private HF repo and pulled down at pipeline-load time via
-`hf_hub_download` (cached through the normal HF cache, same as the base
-model — see [Hardware](#hardware) above for where that cache lives).
+Two custom fine-tunes are hosted in the same private
+[`elliotcareydev/minimax-h3-fingering-lora`](https://huggingface.co/elliotcareydev/minimax-h3-fingering-lora)
+repo:
+
+- [`MinimaxH3-Fingering_000002000.safetensors`](https://huggingface.co/elliotcareydev/minimax-h3-fingering-lora) — adapter name `fingering`
+- [`MinimaxH3-PussySpread_v0.1.safetensors`](https://huggingface.co/elliotcareydev/minimax-h3-fingering-lora) — adapter name `pussy_spread`
+
+Both are ~155MB — over GitHub's 100MB push limit and far bigger than
+anything else in this repo's git history — so instead of committing them,
+they're pulled down at pipeline-load time via `hf_hub_download` (cached
+through the normal HF cache, same as the base model — see
+[Hardware](#hardware) above for where that cache lives).
 
 This model has no pipe-level `load_lora_weights()` (`ModularPipeline`
 doesn't have one the way `DiffusionPipeline` does — compare
 `qwen_image/processing/generate_image.py`'s
 `pipe.load_lora_weights('starsfriday/Qwen-Image-NSFW', ...)`); instead
-`MiniMaxH3Transformer3DModel` is itself a PEFT adapter host, so the LoRA is
-loaded straight onto `pipe.transformer` via `load_lora_adapter()` with the
-downloaded state dict (see `_get_pipe()` in
-`processing/generate_video.py`).
+`MiniMaxH3Transformer3DModel` is itself a PEFT adapter host, so both LoRAs
+are loaded straight onto `pipe.transformer` via `load_lora_adapter()`,
+each under its own adapter name, at pipeline-load time (see `_get_pipe()`
+in `processing/generate_video.py`). Which one(s) actually apply to a given
+`image_to_video` call is then chosen per-request by `_set_active_loras()`,
+driven by the `lora` param (`"fingering"`, `"pussy_spread"`, `"both"`, or
+`"none"`) via `pipe.transformer.set_adapters()`/`disable_adapters()` —
+they're not both always-on, since the two are unrelated NSFW concepts a
+caller may want independently.
 
-It's applied only to `pipe.transformer` (fl2va, the `image_to_video` task)
-— the LoRA was trained/validated against that checkpoint partition
+Both are applied only to `pipe.transformer` (fl2va, the `image_to_video`
+task) — they were trained/validated against that checkpoint partition
 specifically. `pipe.transformer_ref` (ref2va, `reference_to_video`) is
-left un-adapted; applying this same state dict there is untested and not
+left un-adapted; applying either state dict there is untested and not
 assumed to be safe, so `reference_to_video` currently runs the stock
-model with no fine-tune.
+model with no fine-tune and has no `lora` param.
 
-This checkpoint was trained with [ai-toolkit](https://github.com/ostris/ai-toolkit)
-(per its own `__metadata__`), which exports denoiser LoRA keys prefixed
+Both checkpoints were trained with [ai-toolkit](https://github.com/ostris/ai-toolkit)
+(per their own `__metadata__`), which exports denoiser LoRA keys prefixed
 `diffusion_model.` rather than diffusers' own `transformer.` convention
 that `load_lora_adapter`'s default prefix filtering expects — confirmed
 from a real worker log, where it silently matched **zero** keys (logged,
 not raised: `No LoRA keys associated to MiniMaxH3Transformer3DModel found
 with the prefix='transformer'`) and the LoRA quietly never applied at
 all. `_get_pipe()` renames the `diffusion_model.` prefix to `transformer.`
-on the loaded state dict.
+on each loaded state dict.
 
 That rename alone wasn't enough, though — ai-toolkit trained against
 MiniMax-H3's "native"/ComfyUI-style fused architecture, not diffusers'
@@ -215,9 +231,10 @@ concatenated), swaps `fc1`'s two lora_B halves into diffusers' gate/value
 order, and renames `out_proj`/`fc2` straight across. This matches the
 conversion [InstantX/MiniMax-H3-Turbo-Lora-Diffusers](https://huggingface.co/InstantX/MiniMax-H3-Turbo-Lora-Diffusers)
 documents needing for the same model family, and is verified structurally
-against this LoRA's actual tensor shapes (see the function's docstring)
-— but **not** against real generation output (no local GPU to test
-against). Confirm the LoRA is visibly having an effect on a real
+against both LoRAs' actual tensor shapes (`pussy_spread` has the exact
+same 416-tensor layout as `fingering` — see the function's docstring) —
+but **not** against real generation output (no local GPU to test
+against). Confirm each LoRA is visibly having an effect on a real
 generation before trusting this blindly.
 
 ### A note on freshness

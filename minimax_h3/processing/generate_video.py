@@ -15,15 +15,33 @@ from safetensors.torch import load_file as load_safetensors
 
 MODEL_NAME = "MiniMaxAI/MiniMax-H3"
 
-# Custom fine-tune trained for this server specifically, applied on top of
-# the stock MiniMax-H3 fl2va transformer on every request. Too large for
-# git (155MB, over GitHub's 100MB push limit), so it's hosted on a private
-# HF repo and pulled down through the normal HF cache (HF_TOKEN needs read
-# access to it, same token used for the gated base-model download - see
-# entrypoint.sh's HF_HOME redirect for where that cache lives).
+# Custom fine-tunes trained for this server specifically, both hosted in the
+# same private HF repo and pulled down through the normal HF cache (HF_TOKEN
+# needs read access to it, same token used for the gated base-model download
+# - see entrypoint.sh's HF_HOME redirect for where that cache lives). Each is
+# individually too large for git (both 155MB, over GitHub's 100MB push
+# limit). Both are loaded onto pipe.transformer as separate PEFT adapters at
+# startup; which one(s) apply to a given generation is chosen per-request via
+# the `lora` param (see LORA_CHOICES / _set_active_loras below) rather than
+# always-on, since the two are unrelated NSFW concepts a caller may want
+# independently, together, or not at all.
 LORA_REPO_ID = "elliotcareydev/minimax-h3-fingering-lora"
-LORA_FILENAME = "MinimaxH3-Fingering_000002000.safetensors"
-LORA_ADAPTER_NAME = "fingering"
+LORA_ADAPTER_NAME_FINGERING = "fingering"
+LORA_FILENAME_FINGERING = "MinimaxH3-Fingering_000002000.safetensors"
+LORA_ADAPTER_NAME_PUSSY_SPREAD = "pussy_spread"
+LORA_FILENAME_PUSSY_SPREAD = "MinimaxH3-PussySpread_v0.1.safetensors"
+
+# Maps each caller-facing `lora` value to the adapter name(s) activated on
+# pipe.transformer for that request. "fingering" is run_image_to_video's
+# default (see its `lora` param) to preserve this server's previous
+# always-on behavior for existing callers. Not used by run_reference_to_video
+# - see that function's docstring for why.
+LORA_CHOICES = {
+    "none": [],
+    "fingering": [LORA_ADAPTER_NAME_FINGERING],
+    "pussy_spread": [LORA_ADAPTER_NAME_PUSSY_SPREAD],
+    "both": [LORA_ADAPTER_NAME_FINGERING, LORA_ADAPTER_NAME_PUSSY_SPREAD],
+}
 
 DEFAULT_NUM_FRAMES = 124  # ~5.2s at MiniMax-H3's fixed 24fps - see run_image_to_video's docstring.
 MAX_REFERENCE_IMAGES = 9  # MiniMax-H3's own ref2va limit.
@@ -205,45 +223,73 @@ def _get_pipe() -> ModularPipeline:
 
         # ModularPipeline has no pipe-level load_lora_weights() (unlike the
         # DiffusionPipeline used in qwen_image/cyberrealistic_pony, see
-        # qwen_image/processing/generate_image.py) - the LoRA is loaded
+        # qwen_image/processing/generate_image.py) - each LoRA is loaded
         # directly onto the transformer component, which is a
-        # PeftAdapterMixin. hf_hub_download uses the standard HF cache, so
-        # this only re-downloads after a cache eviction, not on every
-        # worker restart.
+        # PeftAdapterMixin, under its own adapter_name. hf_hub_download uses
+        # the standard HF cache, so this only re-downloads after a cache
+        # eviction, not on every worker restart. Which adapter(s) actually
+        # affect a given generation is chosen later, per-request, by
+        # _set_active_loras - loading both here just makes both available.
         #
-        # Applied only to `pipe.transformer` (the fl2va partition this LoRA
-        # was actually trained/validated against) - ref2va's separate
+        # Applied only to `pipe.transformer` (the fl2va partition both LoRAs
+        # were actually trained/validated against) - ref2va's separate
         # `pipe.transformer_ref` component is left un-adapted. Revisit if a
-        # ref2va-specific LoRA is ever trained; applying this same state
-        # dict to transformer_ref is untested and not assumed to be safe.
-        lora_path = hf_hub_download(repo_id=LORA_REPO_ID, filename=LORA_FILENAME)
-        lora_state_dict = load_safetensors(lora_path)
-        # This checkpoint's own __metadata__ (software: ai-toolkit,
-        # https://github.com/ostris/ai-toolkit) confirms it was trained
-        # with ai-toolkit, which exports denoiser LoRA keys prefixed
-        # "diffusion_model." (e.g. "diffusion_model.blocks.0.attn...") -
-        # not diffusers' own "transformer." convention that
-        # load_lora_adapter's default prefix filtering expects. Without
-        # this rename it silently matches zero keys (logged as "No LoRA
-        # keys associated to MiniMaxH3Transformer3DModel found with the
-        # prefix='transformer'" rather than raising), so the LoRA quietly
-        # never applies at all - confirmed from a real worker log, not
-        # speculation.
-        lora_state_dict = {
-            key.replace("diffusion_model.", "transformer.", 1): value
-            for key, value in lora_state_dict.items()
-        }
-        # Renaming the prefix alone isn't enough - see
-        # _convert_ai_toolkit_lora_state_dict's docstring for why (fused
-        # qkv_proj vs. diffusers' separate to_q/to_k/to_v, and an
-        # ai-toolkit-vs-diffusers SwiGLU half-ordering mismatch), also
-        # confirmed from a real worker log.
-        lora_state_dict = _convert_ai_toolkit_lora_state_dict(lora_state_dict)
-        pipe.transformer.load_lora_adapter(lora_state_dict, adapter_name=LORA_ADAPTER_NAME)
-        pipe.transformer.set_adapters([LORA_ADAPTER_NAME])
+        # ref2va-specific LoRA is ever trained; applying either state dict to
+        # transformer_ref is untested and not assumed to be safe.
+        for adapter_name, filename in (
+            (LORA_ADAPTER_NAME_FINGERING, LORA_FILENAME_FINGERING),
+            (LORA_ADAPTER_NAME_PUSSY_SPREAD, LORA_FILENAME_PUSSY_SPREAD),
+        ):
+            lora_path = hf_hub_download(repo_id=LORA_REPO_ID, filename=filename)
+            lora_state_dict = load_safetensors(lora_path)
+            # Both checkpoints' own __metadata__ (software: ai-toolkit,
+            # https://github.com/ostris/ai-toolkit) confirm they were
+            # trained with ai-toolkit, which exports denoiser LoRA keys
+            # prefixed "diffusion_model." (e.g.
+            # "diffusion_model.blocks.0.attn...") - not diffusers' own
+            # "transformer." convention that load_lora_adapter's default
+            # prefix filtering expects. Without this rename it silently
+            # matches zero keys (logged as "No LoRA keys associated to
+            # MiniMaxH3Transformer3DModel found with the prefix='transformer'"
+            # rather than raising), so the LoRA quietly never applies at all
+            # - confirmed from a real worker log, not speculation.
+            lora_state_dict = {
+                key.replace("diffusion_model.", "transformer.", 1): value
+                for key, value in lora_state_dict.items()
+            }
+            # Renaming the prefix alone isn't enough - see
+            # _convert_ai_toolkit_lora_state_dict's docstring for why (fused
+            # qkv_proj vs. diffusers' separate to_q/to_k/to_v, and an
+            # ai-toolkit-vs-diffusers SwiGLU half-ordering mismatch), also
+            # confirmed from a real worker log. Both LoRAs share this exact
+            # 416-tensor ai-toolkit layout (verified against this second
+            # checkpoint's own tensor shapes before wiring it up), so the
+            # same conversion applies unchanged to both.
+            lora_state_dict = _convert_ai_toolkit_lora_state_dict(lora_state_dict)
+            pipe.transformer.load_lora_adapter(lora_state_dict, adapter_name=adapter_name)
 
         _PIPE = pipe
     return _PIPE
+
+
+def _set_active_loras(pipe: ModularPipeline, lora: str) -> None:
+    """Activates the adapter(s) on pipe.transformer corresponding to the
+    caller-facing `lora` choice (see LORA_CHOICES), deactivating any others.
+    Must be called before every pipe(...) call, not just once at load time -
+    pipe.transformer is shared across requests via the module-level _PIPE
+    cache, so a prior request's selection would otherwise stick.
+    """
+    try:
+        adapter_names = LORA_CHOICES[lora]
+    except KeyError:
+        raise ValueError(
+            f"Unknown lora {lora!r}, expected one of {sorted(LORA_CHOICES)}"
+        ) from None
+
+    if adapter_names:
+        pipe.transformer.set_adapters(adapter_names)
+    else:
+        pipe.transformer.disable_adapters()
 
 
 # `ComponentsManager`'s auto-offload hooks intermittently hit a known
@@ -301,6 +347,7 @@ def run_image_to_video(
     num_frames: int = DEFAULT_NUM_FRAMES,
     num_inference_steps: int = DEFAULT_NUM_INFERENCE_STEPS,
     seed: Optional[int] = None,
+    lora: str = "fingering",
     progress_callback: Optional[Callable[[int, int], None]] = None,
     status_callback: Optional[Callable[[str], None]] = None,
 ) -> bytes:
@@ -323,6 +370,10 @@ def run_image_to_video(
             purely a quality/speed knob: fewer steps trades quality for a
             faster generation, more steps the reverse.
         seed: optional, for reproducible generations.
+        lora: which of this server's two custom LoRAs to apply - one of
+            LORA_CHOICES ("fingering", "pussy_spread", "both", "none").
+            Defaults to "fingering" to preserve this server's previous
+            always-on behavior for existing callers.
         progress_callback: optional, kept for interface parity with the
             other servers' per-step reporting. MiniMax-H3's checkpoints are
             guidance-distilled (no guider, no negative_prompt, no
@@ -340,6 +391,7 @@ def run_image_to_video(
             in.
     """
     pipe = _get_pipe()
+    _set_active_loras(pipe, lora)
 
     decoded_image = base64.b64decode(image_bytes)
     input_image = Image.open(BytesIO(decoded_image)).convert("RGB")
@@ -394,7 +446,10 @@ def run_reference_to_video(
             wanted - the model doesn't infer which reference is meant
             without one.
         num_frames, num_inference_steps, seed, progress_callback,
-            status_callback: see run_image_to_video.
+            status_callback: see run_image_to_video. No `lora` param here -
+            both LoRAs are only ever loaded onto pipe.transformer (the fl2va
+            partition), not pipe.transformer_ref which this ref2va path
+            uses, so they have no effect on this function; see _get_pipe.
 
     Returns:
         bytes: base64-encoded MP4, with its synchronized audio track muxed
